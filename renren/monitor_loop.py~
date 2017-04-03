@@ -1,0 +1,11 @@
+import os
+import time
+import os.path
+while True:
+	time.sleep(60*10)
+	if os.path.exists("Taskfail"):
+		try:
+			os.remove("Taskfail")
+			os.system("python MobileRenRen.py")
+		except Exception e:
+			print("监控过程出现问题........%s"%e)

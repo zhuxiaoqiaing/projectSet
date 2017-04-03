@@ -1,0 +1,309 @@
+# -*- coding: utf-8 -*-
+import time
+import datetime
+import json
+import sys
+sys.path.append("..")
+from util import util
+from util.DButil import HbaseHelp
+try:
+    from PIL import Image
+except:
+    pass
+import urllib
+import os
+import os.path
+#from DButil.mysqlHelp import pysqlHelp
+import requests
+import time
+from lxml import etree
+import re
+import config
+import random
+class MobileRenRen():
+    pagecount=0
+    def __init__(self):
+        try:
+            self.hu=HbaseHelp()
+        except:
+            error="数据库连接出现问题...\n"
+            error+="抓取任务中断,生成Taskfail标识.....\n"
+            with open(config.joblogFileName,"a") as f:
+                f.write(error)
+            if not os.path.exists(config.taskfailFile):
+                os.mknod(config.taskfailFile)
+            exit()
+        self.limitSpeed=config.limitSpeed
+        self.limitSpeedSize=config.limitSpeedSize
+        self.endProgram=False
+        self.startTime=datetime.datetime.now()
+        self.beginTime=self.startTime
+        self.users=config.userlist
+        #将帐号顺序打乱,以防下一次重启时的帐号是被暂时封存的帐号
+        random.shuffle(self.users)
+        self.session = requests.session()
+        self.currentuser=-1
+        self.allheaders=config.headers
+        random.shuffle(self.allheaders)
+        self.headerIndex=-1
+        self.headers =""
+        #进行id的适配
+        self.idpattern = re.compile(r"id=([\d]{9})")
+        #记录访问的页面数
+        #记录每1000个页面的执行速度
+        self.timeoutCount=0
+        self.speedlist = []
+        self.successiveFailCount=0
+    """
+    change the headers
+    """
+    def set_headers(self):
+        #self.headers={'User-Agent':'Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:18.0) Gecko/20100101 Firefox/18.0'}
+        self.headerIndex=(self.headerIndex+1)%len(self.allheaders)
+        self.headers={'User-Agent':self.allheaders[self.headerIndex]}
+        print("current header:%s"%self.headers)
+    """
+    init the postdata
+    """
+    def init_postdata(self):
+        resp = requests.get("http://3g.renren.com")
+        mainpage = etree.HTML(resp.content)
+        action = "".join(mainpage.xpath("//form/@action"))
+        inputdata = mainpage.xpath("//form/p/input")
+        postdata = {}
+        for data in inputdata:
+            keyinput = "".join(data.xpath("./@name"))
+            valueinput = "".join(data.xpath("./@value"))
+            postdata.setdefault(keyinput, valueinput)
+        return action,postdata
+    """
+    实现人人网登陆功能
+    """
+    def renren_login(self,logintime=0):
+        self.set_headers()
+        self.currentuser=(self.currentuser+1)%len(self.users)
+        #self.session = requests.session()
+        action,postdata=self.init_postdata()
+        postdata["email"] = self.users[self.currentuser][0]
+        postdata['password'] =self.users[self.currentuser][1]
+        is_Success=False
+        while not self.post_login(action,postdata):
+            print("第%d次登录失败,重新登录"%logintime)
+            logintime+=1
+            if logintime>=5:
+                raise Exception
+            else:
+                self.renren_login(logintime=logintime)
+        else:
+            print("用户%s成功登录"%self.users[self.currentuser][0])
+    """
+    提交登录消息到server
+    """
+    def post_login(self,post_url,postdata):
+        isSuccess=False
+        print("提交数据.......")
+        try:
+            login_page = self.session.post(post_url,data=postdata, headers=self.headers,timeout=20)
+        except:
+            return False
+        login_code = login_page.status_code
+        print("login_url%s"%login_page.url)
+	print(login_page.is_redirect)
+	if int(x=login_code) == 200:
+          #print("成功登录")
+          self.get_userName("http://3g.renren.com/profile.do")
+          return True
+        else:
+            return False
+    """
+    function:分析用户信息页面
+    url:用户页面,用来从中提取出用户id信息
+    page:页面数据,用于分析用户信息
+    return:将用户信息存储进json中
+    """
+    def get_userName(self,url):
+    	resp=self.session.get(url,headers=self.headers,timeout=20)
+    	html=etree.HTML(resp.content)
+    	title="".join(html.xpath("//title//text()"))
+    	print("title:%s"%title)
+    def renren_loginout(self):
+        resp=self.session.get("http://3g.renren.com/profile.do",headers=self.headers,timeout=20)
+        html=etree.HTML(resp.content)
+        loginout_url="".join(html.xpath("//div[@class='sec promotion']/a[last()]/@href"))
+        if loginout_url!="":
+        	self.session.get(loginout_url,headers=self.headers,timeout=20)
+        	print("%s用户成功登出"%self.currentuser[0])
+        else:
+        	print("没有登出操作......")
+    """
+    get the process of fetching renren
+    """
+    def getProcess(self):
+        totalseconds=(datetime.datetime.now()-self.beginTime).seconds
+        information="抓取页面数:(pages)--->%d"%self.pagecount+"\n"+\
+            "运行时间:(hours)---->%.4f"%(totalseconds/3600)+"\n"+\
+            "抓取速度为(pages/s)--->%.1f"%(self.pagecount/totalseconds)
+        return information
+    """
+    end the program
+    """
+    def endSign(self):
+        self.endProgram=True
+    """
+    process the Connection Error
+    """
+    def processConnectionError(self,url,moveurl):
+        while moveurl!=url:
+            self.successiveFailCount+=1
+            if self.successiveFailCount>10:
+                print("休息一段时间,太累了.....")
+                raise Exception
+            if moveurl.find("login.do")!=-1:
+                print("跳转到登录页面了.....")
+                time.sleep(10)
+                self.renren_login()
+            elif moveurl.find("sid")!=-1:
+                #系统繁忙休息一会
+                self.successiveFailCount+=1
+                print("系统繁忙休息一会")
+                #过滤掉这个页面
+                time.sleep(2)
+                return False
+            else:
+                print("需要休息一会这个页面是:%s"%moveurl)
+                time.sleep(30)
+            try:
+                resp = self.session.get(url, headers=self.headers)
+                moveurl = resp.url
+            except Exception as e:
+                print("e:")
+                print("无法连接远程主机")
+        return True
+    def parse_userInformation(self,url):
+        #if due to connection error then raise the exception,finally exit the all program
+        resp=self.session.get(url,headers=self.headers,timeout=30)
+        status_code=resp.status_code
+        #if the status_code is the resp then return 
+        if int(x=status_code)!=200:
+            return
+        moveurl=resp.url
+        if moveurl!=url:
+            is_Continue=self.processConnectionError(url,moveurl)
+            if not is_Continue:
+                return
+        self.pagecount +=1
+        self.successiveFailCount=0
+        #process the information
+        html=etree.HTML(resp.content)
+        id=1000000000
+        #存放hbaseDict键值对
+        hbaseDict={}
+        if len(url.split("?"))>=1:
+            idmatch = self.idpattern.match(moveurl.split("?")[1])
+            if idmatch is not None:
+                id =idmatch.group(1)
+                #print("id is %s"%id)
+            else:
+            	return
+                #self.renrenf.write("id："+id + "\n")
+        #get the username
+        name="".join(html.xpath("//title/text()"))
+        index=name.find("-")
+        if index!=-1:
+            username=name[index+1:]
+        hbaseDict['baseInfo:username']=username
+            #self.renrenf.write("username：%s\n"%username)
+        #用户头像
+        heads=html.xpath("//a[@class='p']/img/@src")
+        if len(heads)==1:
+            #print("head:"+heads[0])
+            hbaseDict['baseInfo:head']=heads[0]
+        # if head!="":
+        #     self.renrenf.write("head:%s\n"%head)
+        #detail information
+        divlist=html.xpath("//div[@class='list']//text()")
+        for div in divlist:
+            if div.strip().find("座")!=-1:
+               hbaseDict['baseInfo:constellation']=div.strip()
+               #print("constellation:%s"%div.strip())
+               continue
+            kv=div.strip().split("：")
+            if len(kv)==2:
+                key=kv[0].strip()
+                value=kv[1].strip()
+                if key.find("性别")!=-1:
+                    hbaseDict['baseInfo:sex']=value
+                if key.find("家乡")!=-1:
+                    hbaseDict['baseInfo:address']=value
+                if key.find("最后登录")!=-1:
+                    hbaseDict['baseInfo:lastLogin']=value
+                if key.find("生日")!=-1:
+                    hbaseDict['baseInfo:birthday']=value
+                if key.find("QQ")!=-1:
+                    hbaseDict['baseInfo:qq']=value
+                if key.find("书籍")!=-1:
+                    hbaseDict['personalInfo:book']=value
+                if key.find("手机")!=-1:
+                    hbaseDict['baseInfo:mobile']=value
+                if key.find("音乐")!=-1:
+                    hbaseDict['personalInfo:music']=value
+                if key.find("电影")!=-1:
+                    hbaseDict['personalInfo:movie']=value
+                if key.find("动漫")!=-1:
+                    hbaseDict['personalInfo:animation']=value
+                if key.find("游戏")!=-1:
+                    hbaseDict['personalInfo:game']=value
+                if key.find("爱好")!=-1:
+                    hbaseDict['personalInfo:hobby']=value
+        #self.sqlhelp.insert(self.con,id,username,head,sex,birthday,address,lastLogin)
+        #self.renrenf.write("---------\n")
+        #flush the data per 100 page
+        # if self.pagecount%100==0:
+        #     self.renrenf.flush()
+        """
+        check the page count then take some action to limit the speed of fetching renren website
+        """
+        self.checkPageCount(id)
+        self.hu.insertRow(id,hbaseDict)
+        if self.limitSpeed:
+            time.sleep(self.limitSpeedSize)
+    """
+    get runnning seconds
+    """
+
+    def getRunningSeconds(self):
+        return (datetime.datetime.now()-self.startTime).seconds
+    """
+        check the page count then take some action to limit the speed of fetching renren website
+    """
+    def checkPageCount(self,id):
+        if self.pagecount%50==0:
+        	now=time.strftime("%Y-%m-%d %H:%M:%S")
+        	print("%s:已经抓取了%d个页面,当前用户id为:%s"%(now,self.pagecount,id))
+        if self.pagecount % 1000 == 0:
+            seconds=self.getRunningSeconds()
+            print("访问1000个页面花了%d秒"%seconds)
+            print("页面下载速度如下:%.1f pages/s"%(1000/seconds))
+            self.speedlist.append("%d个分片速度为%.1f pages/s"%(self.pagecount/1000,1000/seconds))
+            """
+            when the pagecount account to the number that can be devided by 1000,then sleep for some time
+            """
+            if self.pagecount%5000==0:
+                print("休息1分钟.....")
+                time.sleep(60*2)
+                #print("即将重新登录....")
+                #self.renren_login()
+            else:
+                print("该用户登出.....")
+                #self.session.close()
+                print("休息30秒.....")
+                time.sleep(30)
+                print("即将重新登录....")
+                self.renren_login()
+            self.startTime=datetime.datetime.now()
+            #切换账号
+    def __del__(self):
+    	self.hu.close()
+        #self.renrenf.close()
+if __name__=="__main__":
+   pass
