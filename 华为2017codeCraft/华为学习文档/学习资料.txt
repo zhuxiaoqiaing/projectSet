@@ -1,0 +1,17 @@
+最大流算法
+http://blog.csdn.net/javaman_chen/article/details/8277161
+http://www.cnblogs.com/luweiseu/archive/2012/07/14/2591573.html
+http://www.iqiyi.com/edu/20130422/431c5a2a1dcd64e3.html#curid=137840600_80b65d8b238b4634991520f4a673b937
+http://www.cnblogs.com/hxsyl/p/3270401.html
+http://blog.csdn.net/acm_cxq/article/details/52106107
+http://blog.csdn.net/zhang20072844/article/details/8164702
+http://www.cnblogs.com/lcj2018/p/3538498.html
+最短路径算法(SFPA等)
+http://blog.csdn.net/maxichu/article/details/45309463
+最小费用最大流
+多源多汇的最小费用
+http://blog.csdn.net/acm_cxq/article/details/52106107
+详细分析为什么要设计反向边的概率
+http://blog.csdn.net/x_y_q_/article/details/51999466
+华为题目解析
+http://blog.csdn.net/mmy1996/article/details/64443159?winzoom=1
